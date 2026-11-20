@@ -212,6 +212,38 @@ const totalCommitsFetcher = async (username) => {
   return totalCount;
 };
 
+const fetchPublicCommitsLastYear = (variables, token) => {
+  return axios({
+    method: "get",
+    url: `https://api.github.com/search/commits?q=author:${variables.login}+author-date:>=${variables.since}`,
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/vnd.github.cloak-preview",
+      Authorization: `token ${token}`,
+    },
+  });
+};
+
+const publicCommitsLastYearFetcher = async (username) => {
+  if (!githubUsernameRegex.test(username)) {
+    throw new Error("Invalid username provided.");
+  }
+  const since = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 10);
+  try {
+    const res = await retryer(fetchPublicCommitsLastYear, {
+      login: username,
+      since,
+    });
+    const count = res.data.total_count;
+    return isNaN(count) ? 0 : count;
+  } catch (err) {
+    logger.log(err);
+    return 0;
+  }
+};
+
 /**
  * Fetch stats for a given username.
  *
@@ -285,9 +317,15 @@ const fetchStats = async (
 
   stats.name = user.name || user.login;
 
-  // if include_all_commits, fetch all commits using the REST API.
+  // if include_all_commits, fetch all public commits via Search API and add
+  // private last-year contributions on top (GitHub exposes no all-time private
+  // commit count, so last-year is the best available).
   if (include_all_commits) {
-    stats.totalCommits = await totalCommitsFetcher(username);
+    const publicAllTime = await totalCommitsFetcher(username);
+    const contribLastYear = user.commits.totalCommitContributions;
+    const publicLastYear = await publicCommitsLastYearFetcher(username);
+    const privateLastYear = Math.max(0, contribLastYear - publicLastYear);
+    stats.totalCommits = publicAllTime + privateLastYear;
   } else {
     stats.totalCommits = user.commits.totalCommitContributions;
   }
